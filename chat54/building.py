@@ -115,11 +115,14 @@ class Building:
                                            args=(decision, t0), daemon=True)
         self._cd_thread.start()
         if decision.line:
+            vibe = decision.vibe or "the room's vibe"
             return {
                 "user": "building54",
-                "text": decision.emoji + "  " + decision.line,
+                "text": (f"{decision.emoji}  vibe: {vibe} — showing "
+                         f"{decision.behavior} — {decision.line}"),
                 "behavior": decision.behavior,
                 "label": decision.label,
+                "vibe": decision.vibe,
                 "mood": round(self.director.mood, 2),
             }
         return None
@@ -134,16 +137,21 @@ class Building:
             self.outbox.put({"user": "building54", "text": keycap,
                              "kind": "countdown", "behavior": "countdown",
                              "mood": round(self.director.mood, 2)})
-        # reveal: lands exactly as the show starts; the emoji alone if the
-        # decision had no line (e.g. the quiet-room wave)
+        # reveal: lands exactly as the show starts. The chat always states
+        # what the brain decided: the vibe read and the show it chose.
         delay = (t0 + 3 * step) - time.monotonic()
         if delay > 0:
             time.sleep(delay)
+        vibe = decision.vibe or "the room's vibe"
+        text = (f"{decision.emoji}  vibe: {vibe} — showing "
+                f"{decision.behavior}"
+                + (f" — {decision.line}" if decision.line else ""))
         reply = {
             "user": "building54",
-            "text": decision.emoji + ("  " + decision.line if decision.line else ""),
+            "text": text,
             "behavior": decision.behavior,
             "label": decision.label,
+            "vibe": decision.vibe,
             "mood": round(self.director.mood, 2),
         }
         self.history.append({"user": "building54", "text": reply["text"],

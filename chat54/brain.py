@@ -71,6 +71,7 @@ class BrainDecision:
     line: str | None = None
     label: str = ""                     # behavior label for chat metadata
     memory_notes: list[str] = field(default_factory=list)
+    vibe: str | None = None             # 1-3 word read of the room's vibe
 
 
 # --- intent rules ------------------------------------------------------------

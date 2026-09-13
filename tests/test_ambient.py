@@ -81,12 +81,15 @@ def test_llm_reads_only_new_window(building):
 def test_llm_decision_chains_after_countdown(building):
     from chat54.brain import BrainDecision
     stub = StubLLMBrain(decision=BrainDecision(
-        "🎉", "confetti", +3, "this room is alive.", "celebrates"))
+        "🎉", "confetti", +3, "this room is alive.", "celebrates",
+        vibe="hyped"))
     building.brain = stub
     building.handle_message("maya", "PARTY!")
     settle(building)
     r = building.ambient_cycle()
     assert r is not None and "alive" in r["text"]
+    assert "vibe: hyped" in r["text"]          # the chat names the vibe read
+    assert "confetti" in r["text"]              # ...and the chosen show
     assert building.director._current.__name__ == "draw_countdown"
     assert building.director._queued.__name__ == "draw_confetti"
 

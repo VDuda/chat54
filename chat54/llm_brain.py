@@ -50,14 +50,15 @@ the behavior that matches what you want your body to do."""
 BEHAVIOR_MENU = "\n".join(
     f"- {name}: {fn.label or 'a light show'}"
     for name, fn in facade.BEHAVIORS.items()
-    if name not in ("breathe", "listen")     # idle states, not reply shows
+    if name not in ("breathe", "listen", "countdown")   # idle/mechanic states
 )
 
 SCHEMA = (
     'Reply with ONLY a JSON object: {"emoji": str (1-2 emojis), '
     '"behavior": one of the listed behaviors, "energy": int from -3 to 3 '
     '(how much this message moves your mood), "line": str (your voice line, '
-    'under 90 chars, or "" for no line)}.'
+    'under 90 chars, or "" for no line), "vibe": str (1-3 words naming the '
+    'room\'s emotional temperature, e.g. "hyped", "tense", "tired", "warm")}.'
 )
 
 # recent chat turns handed to the model
@@ -85,6 +86,7 @@ class LLMBrain(Brain):
         self._last_call = 0.0
         self._throttle_lock = threading.Lock()
         self.fallbacks = 0            # visible in status/logs, fun trivia
+        self._recent_ambient: list[str] = []   # last ambient shows (anti-repeat)
 
     # --- interface -------------------------------------------------------------
 
@@ -149,23 +151,56 @@ class LLMBrain(Brain):
         ]
         recent = "\n".join(turns) if turns else "(the chat just started)"
         win = "\n".join(f"{m['user']}: {m['text']}" for m in window)
+        recent_shows = ", ".join(self._recent_ambient) or "(none yet)"
         prompt = (
             f"{SCHEMA}\n\nBEHAVIORS:\n{BEHAVIOR_MENU}\n\n"
-            f"Your current mood: {mood:+.1f} (-3 grumpy .. +3 giddy)\n\n"
+            f"Your current mood: {mood:+.1f} (-3 grumpy .. +3 giddy)\n"
+            f"Your last shows: {recent_shows}\n\n"
             f"Recent chat:\n{recent}\n\n"
             f"NEW messages since you last looked:\n{win}\n\n"
-            "Pick ONE behavior that expresses the emotional temperature of the "
-            "NEW messages, and a short line reacting to the room. If the new "
-            "messages are few or bland, a friendly wave is a fine choice."
+            "Pick ONE behavior that matches the actual emotional temperature "
+            "of the NEW messages. Match intensity honestly: most conversation "
+            "is NOT a party - reserve confetti for real celebration, use wave "
+            "or look or story for calm/worky chat, and grumble or goodnight "
+            "when the room is negative or winding down. Vary your choices; do "
+            "not repeat your last show without a reason. Reply with a short "
+            "line reacting to the room."
         )
-        raw = self._chat_fn(prompt)
-        data = json.loads(raw)
+        data = None
+        for attempt, nudge in enumerate(("", "\n(JSON only, no prose.)",
+                                         "\nAnswer now with the JSON object only.")):
+            raw = self._chat_fn(prompt + nudge)
+            try:
+                data = json.loads(raw)
+                break
+            except Exception:
+                continue                   # tiny models sometimes never emit content
+        if data is None:
+            raise ValueError("model returned no parseable content in 3 attempts")
+        behavior = data.get("behavior")
         line = (data.get("line") or "").strip() or None
         emoji = (data.get("emoji") or "👋").strip()[:8]
         energy = max(-3, min(3, int(data.get("energy", 0))))
-        label = getattr(facade.BEHAVIORS.get(data.get("behavior")), "label", "")
-        return BrainDecision(emoji, data.get("behavior"), energy, line,
-                             label or "", memory_notes=["llm-ambient"])
+        vibe = (data.get("vibe") or "").strip()[:24] or None
+        # anti-repeat: if the model picked the same show twice running (its
+        # small-model habit), re-roll once with an explicit nudge
+        if (len(self._recent_ambient) >= 2
+                and behavior == self._recent_ambient[-1]
+                == self._recent_ambient[-2]
+                and behavior != "wave"):
+            raw = self._chat_fn(
+                prompt + f"\n\nYou have already shown {behavior} twice in a "
+                "row. Pick a DIFFERENT behavior this time.")
+            data = json.loads(raw)
+            behavior = data.get("behavior")
+            line = (data.get("line") or "").strip() or line
+            vibe = (data.get("vibe") or vibe or "")[:24] or vibe
+            emoji = (data.get("emoji") or emoji).strip()[:8]
+            energy = max(-3, min(3, int(data.get("energy", energy))))
+        self._recent_ambient.append(behavior)
+        label = getattr(facade.BEHAVIORS.get(behavior), "label", "")
+        return BrainDecision(emoji, behavior, energy, line,
+                             label or "", memory_notes=["llm-ambient"], vibe=vibe)
 
     def _ask_llm(self, user: str, text: str, history: list, mood: float) -> BrainDecision:
         self._throttle()
@@ -214,9 +249,12 @@ class LLMBrain(Brain):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.9,
-            # the free liquid model always reasons first; its thinking counts
-            # against max_tokens, so leave real headroom or content arrives empty
+            # the free liquid model must reason before answering (it cannot
+            # be disabled) and reasoning counts against max_tokens; without
+            # a cap it can spiral for thousands of tokens and hit the limit
+            # with empty content. ~400 keeps it decisive.
             max_tokens=1000,
+            extra_body={"reasoning": {"enabled": True, "max_tokens": 600}},
             timeout=15,
         )
         content = resp.choices[0].message.content or ""
