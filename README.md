@@ -22,10 +22,12 @@ phone (scan QR) ──ws──▶ chat54 server ──▶ brain (message → rep
         └────── building's replies appear in the same chat ────────────────────────────┘
 ```
 
-- **brain** — rule-based intent matcher (keyword + fuzzy, zero API keys, instant).
-  Decides the reply emoji, a facade behavior, mood energy, and sometimes a
-  voice line. Remembers per-user sentiment. (An LLM-backed brain is a natural
-  next step — the Brain interface is one method.)
+- **brain** — two interchangeable brains behind one `respond()` interface:
+  - `rules` (default): keyword + fuzzy intent matching, zero API keys, instant.
+  - `llm`: OpenAI-backed, sees the recent group chat and the running mood, and
+    picks the facade behavior from the real menu. Strict JSON contract;
+    *any* failure — no key, network error, malformed JSON, hallucinated
+    behavior name — falls back to the rule brain, so the demo never dies.
 - **director** — a tiny mood state machine. Likes/energy accumulate into a
   persistent mood (grumpy ↔ chill ↔ giddy) that tints the idle animation and
   future replies. Crossfades between behaviors; never hard-cuts.
@@ -60,11 +62,23 @@ there's exactly one frame writer per instance.
 With no `--instance` (or `--display dummy`), a big ANSI terminal preview runs
 instead — handy for developing on a plane.
 
+### LLM brain (optional)
+
+```bash
+export OPENAI_API_KEY=sk-...     # pip install openai (already in requirements)
+python -m chat54.server --instance clever-lynx --brain llm
+```
+
+The building then answers with full group-chat context — it can riff on what
+other people said, address people by name unprompted, and choose shows the
+rule matcher would never fire. If the API is down or slow, replies quietly
+fall back to the rule brain (the counter lives at `building.brain.fallbacks`).
+
 ## Layout
 
 ```
 chat54/
-  chat54/             # the app (facade, director, brain, memory, server, …)
+  chat54/             # the app (facade, director, brain, llm_brain, memory, server, …)
   gbsim/              # vendored simulator client (from willsarg/sundai-greenbuilding-sim)
   tests/
   live_test.py        # scripted conversation against a real simulator instance

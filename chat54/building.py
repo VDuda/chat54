@@ -28,16 +28,25 @@ class Building:
     """Glue: brain + memory + director + display."""
 
     def __init__(self, instance: str | None = None, base_url: str | None = None,
-                 memory_path: str = "chat54_memory.json"):
+                 memory_path: str = "chat54_memory.json", brain: str = "rules"):
         from .memory import Memory
-        self.brain = Brain(memory=Memory(memory_path))
+        memory = Memory(memory_path)
+        if brain == "llm":
+            from .llm_brain import LLMBrain
+            self.brain = LLMBrain(memory=memory)
+        else:
+            self.brain = Brain(memory=memory)
         self.director = Director()
         self.display = open_display(instance, base_url)
         self.outbox: queue.Queue[dict] = queue.Queue()
+        self.history: list[dict] = []          # recent chat, for LLM context
 
     def handle_message(self, user: str, text: str) -> dict:
         """Process one chat message; returns the building's reply dict."""
-        decision = self.brain.respond(user, text)
+        self.history.append({"user": user, "text": text})
+        decision = self.brain.respond(user, text,
+                                      history=self.history[-12:],
+                                      mood=self.director.mood)
         self.director.on_reply(decision.behavior, decision.energy)
         reply = {
             "user": "building54",
@@ -46,6 +55,8 @@ class Building:
             "label": decision.label,
             "mood": round(self.director.mood, 2),
         }
+        self.history.append({"user": "building54", "text": reply["text"]})
+        self.history = self.history[-50:]
         self.outbox.put(reply)
         return reply
 
@@ -79,9 +90,13 @@ def main() -> None:
                     help="simulator instance name (omit for ANSI preview)")
     ap.add_argument("--base-url", default=None,
                     help="override simulator API base URL")
+    ap.add_argument("--brain", default="rules", choices=["rules", "llm"],
+                    help="llm needs OPENAI_API_KEY and the openai package; "
+                         "falls back to rules on any failure")
     args = ap.parse_args()
 
-    building = Building(instance=args.instance, base_url=args.base_url)
+    building = Building(instance=args.instance, base_url=args.base_url,
+                        brain=args.brain)
     stop = threading.Event()
     threading.Thread(target=run_building_loop, args=(building, stop),
                      daemon=True).start()

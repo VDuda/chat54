@@ -99,28 +99,39 @@ GREET_TOKENS = {"hi", "hey", "hello", "yo", "sup", "hiya", "howdy"}
 
 
 class Brain:
+    """Rule-based brain. Subclasses may be smarter (see llm_brain)."""
+
+    LOVE_ALL = LOVE_WORDS
+    HATE_ALL = HATE_WORDS
     def __init__(self, memory: Memory | None = None, seed: int | None = None):
         self.memory = memory or Memory()
         self.rng = random.Random(seed)
 
-    def respond(self, user: str, text: str) -> BrainDecision:
+    def respond(self, user: str, text: str, *, history: list | None = None,
+                mood: float = 0.0, remember: bool = True) -> BrainDecision:
+        """Decide a reply.
+
+        history (recent chat messages) and mood are optional context a richer
+        brain may use; this rule brain ignores them. remember=False skips all
+        memory writes (used when an LLM brain falls back after already having
+        recorded the message itself).
+        """
         t = text.lower().strip()
         notes: list[str] = []
 
-        # memory bookkeeping
-        if _has(t, *LOVE_WORDS) or _fuzzy(t, LOVE_WORDS):
-            delta = +1
-        elif _has(t, *HATE_WORDS) or _fuzzy(t, HATE_WORDS):
-            delta = -1
+        # memory bookkeeping: sentiment tallies only on fresh messages; a
+        # fallback pass (remember=False) must not double-count.
+        if remember:
+            if _has(t, *LOVE_WORDS) or _fuzzy(t, LOVE_WORDS):
+                self.memory.add_sentiment(user, +1)
+                notes.append("+")
+            elif _has(t, *HATE_WORDS) or _fuzzy(t, HATE_WORDS):
+                self.memory.add_sentiment(user, -1)
+                notes.append("-")
+            visits = self.memory.visit(user)
         else:
-            delta = 0
-        if delta:
-            self.memory.add_sentiment(user, delta)
-            notes.append(f"{'+' if delta > 0 else '-'}")
-
-        visits = self.memory.visit(user)
-        if visits == 2:
-            notes.append("returning")
+            info = self.memory._users.get(user)
+            visits = info.visits if info else 1
 
         # greetings & identity first
         tokens = set(re.findall(r"[a-z']+", t))
@@ -136,11 +147,11 @@ class Brain:
             return BrainDecision("🏢", "story", +1, self._line("whoami"),
                                  facade.get("story").label, notes)
 
-        # affection / hostility
+        # affection / hostility (reply matching runs even on fallback passes)
         if _has(t, *LOVE_WORDS) or _fuzzy(t, LOVE_WORDS):
-            loves = self.memory.count_kind(user, "love")
-            if loves >= 3:
-                line = REPEAT_LOVE.format(n=loves)
+            if remember:
+                loves = self.memory.count_kind(user, "love")
+                line = REPEAT_LOVE.format(n=loves) if loves >= 3 else self._line("love")
             else:
                 line = self._line("love")
             return BrainDecision("🥰", "blush", +2, line,

@@ -106,7 +106,9 @@ async def ws_endpoint(ws: WebSocket):
                 if not text:
                     continue
                 await room.broadcast({"type": "msg", "user": name, "text": text})
-                reply = building.handle_message(name, text)
+                # the LLM brain can take a couple of seconds; keep the socket
+                # loop responsive by moving the reply off the event loop
+                reply = await asyncio.to_thread(building.handle_message, name, text)
                 await room.broadcast({"type": "msg", **reply})
     except WebSocketDisconnect:
         pass
@@ -137,11 +139,15 @@ def main() -> None:
                     help="simulator instance name (omit for ANSI terminal preview)")
     ap.add_argument("--base-url", default="https://sundai.willsarg.com/api")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--brain", default="rules", choices=["rules", "llm"],
+                    help="llm needs OPENAI_API_KEY and the openai package; "
+                         "falls back to rules on any failure")
     args = ap.parse_args()
 
     print("chat54 server starting")
     if args.instance:
-        building = Building(instance=args.instance, base_url=args.base_url)
+        building = Building(instance=args.instance, base_url=args.base_url,
+                            brain=args.brain)
         print(f"streaming to {args.instance}: "
               f"https://sundai.willsarg.com/{args.instance}?view=close")
     else:
