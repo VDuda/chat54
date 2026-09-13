@@ -132,6 +132,41 @@ class LLMBrain(Brain):
                 time.sleep(wait)
             self._last_call = time.monotonic()
 
+    def ambient(self, window: list[dict], history: list,
+                mood: float) -> BrainDecision:
+        """Take the room's temperature: one decision per cycle, not per message.
+
+        `window` is the messages posted since the last cycle; the model reads
+        them in the context of the recent chat and picks ONE behavior that
+        expresses the room's emotional temperature. Called on a timer (15s),
+        so quota spend is bounded at 4 calls/min regardless of chatter.
+        """
+        self._throttle()
+        turns = [
+            f"{m['user']}: {m['text']}"
+            for m in (history or [])[-HISTORY_TURNS:]
+            if m.get("user") != "building54"
+        ]
+        recent = "\n".join(turns) if turns else "(the chat just started)"
+        win = "\n".join(f"{m['user']}: {m['text']}" for m in window)
+        prompt = (
+            f"{SCHEMA}\n\nBEHAVIORS:\n{BEHAVIOR_MENU}\n\n"
+            f"Your current mood: {mood:+.1f} (-3 grumpy .. +3 giddy)\n\n"
+            f"Recent chat:\n{recent}\n\n"
+            f"NEW messages since you last looked:\n{win}\n\n"
+            "Pick ONE behavior that expresses the emotional temperature of the "
+            "NEW messages, and a short line reacting to the room. If the new "
+            "messages are few or bland, a friendly wave is a fine choice."
+        )
+        raw = self._chat_fn(prompt)
+        data = json.loads(raw)
+        line = (data.get("line") or "").strip() or None
+        emoji = (data.get("emoji") or "👋").strip()[:8]
+        energy = max(-3, min(3, int(data.get("energy", 0))))
+        label = getattr(facade.BEHAVIORS.get(data.get("behavior")), "label", "")
+        return BrainDecision(emoji, data.get("behavior"), energy, line,
+                             label or "", memory_notes=["llm-ambient"])
+
     def _ask_llm(self, user: str, text: str, history: list, mood: float) -> BrainDecision:
         self._throttle()
         turns = [

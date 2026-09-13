@@ -65,14 +65,21 @@ instead — handy for developing on a plane.
 ### LLM brain (optional)
 
 ```bash
-export OPENAI_API_KEY=sk-...     # pip install openai (already in requirements)
+export OPENROUTER_API_KEY=sk-or-...   # in .env (gitignored); or OPENAI_API_KEY
 python -m chat54.server --instance clever-lynx --brain llm
 ```
 
-The building then answers with full group-chat context — it can riff on what
-other people said, address people by name unprompted, and choose shows the
-rule matcher would never fire. If the API is down or slow, replies quietly
-fall back to the rule brain (the counter lives at `building.brain.fallbacks`).
+With `--brain llm`, the LLM's **only** job is the **ambient cycle**: every
+15 seconds it reads the messages posted since the last cycle (in the context
+of the recent chat and its mood) and picks ONE behavior expressing the
+room's emotional temperature — or, if the room went quiet, the building just
+waves with **zero API calls**. That bounds spend at <=4 requests/min no
+matter how fast the room chats. Per-message replies stay instant and free
+via the rule brain. Rate limits are respected on both sides: the sim gets
+429-aware exponential backoff, the LLM a 2s minimum call spacing.
+
+Set `CHAT54_MODEL` to override the model (defaults to
+`liquid/lfm-2.5-2.6b:free` on OpenRouter, `gpt-4o-mini` on OpenAI).
 
 ## Layout
 

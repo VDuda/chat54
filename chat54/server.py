@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 import socket
 import threading
 from pathlib import Path
@@ -58,6 +59,24 @@ class Room:
 
 
 room = Room()
+_outbox_task = None                     # strong ref so the task is never GC'd
+
+
+@app.on_event("startup")
+async def start_outbox_pump():
+    """Single fan-out for everything the building says (replies + ambient)."""
+    global _outbox_task
+
+    async def poller():
+        while True:
+            try:
+                reply = await asyncio.to_thread(building.outbox.get, True, 1.0)
+                await room.broadcast({"type": "msg", **reply})
+            except queue.Empty:
+                await asyncio.sleep(0.1)
+            except Exception:
+                await asyncio.sleep(0.5)   # never let the pump die
+    _outbox_task = asyncio.create_task(poller())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -106,10 +125,10 @@ async def ws_endpoint(ws: WebSocket):
                 if not text:
                     continue
                 await room.broadcast({"type": "msg", "user": name, "text": text})
-                # the LLM brain can take a couple of seconds; keep the socket
-                # loop responsive by moving the reply off the event loop
-                reply = await asyncio.to_thread(building.handle_message, name, text)
-                await room.broadcast({"type": "msg", **reply})
+                # the brain can take a couple of seconds; keep the socket
+                # loop responsive by moving the work off the event loop. The
+                # building's reply is fanned out by the outbox pump below.
+                await asyncio.to_thread(building.handle_message, name, text)
     except WebSocketDisconnect:
         pass
     finally:
@@ -155,6 +174,7 @@ def main() -> None:
     stop_event = threading.Event()
     threading.Thread(target=run_building_loop, args=(building, stop_event),
                      daemon=True).start()
+    building.start_ambient(stop_event)     # 15s room-temperature cycle
 
     print(f"join the group chat: {lan_url()}   (QR at /qr.svg)")
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")

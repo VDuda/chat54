@@ -16,12 +16,14 @@ import queue
 import threading
 import time
 
-from .brain import Brain
+from .brain import Brain, BrainDecision
 from .director import Director
 from .displays import open_display
 from .display import Frame
+from . import facade
 
 FPS = 30
+AMBIENT_PERIOD_S = 15          # the building checks the room's temperature
 
 
 class Building:
@@ -33,21 +35,30 @@ class Building:
         memory = Memory(memory_path)
         if brain == "llm":
             from .llm_brain import LLMBrain
+            # the LLM's ONLY job is the 15s ambient room-read (bounded quota,
+            # <=4 calls/min); per-message replies come from the instant rule
+            # brain so the building always reacts immediately and for free
             self.brain = LLMBrain(memory=memory)
+            self._instant = Brain(memory=memory)
         else:
             self.brain = Brain(memory=memory)
+            self._instant = self.brain
         self.director = Director()
         self.display = open_display(instance, base_url)
         self.outbox: queue.Queue[dict] = queue.Queue()
         self.history: list[dict] = []          # recent chat, for LLM context
+        self._ambient_pending: list[dict] = [] # messages since last ambient cycle
+        self._show_lock = threading.Lock()     # one director.show at a time
 
     def handle_message(self, user: str, text: str) -> dict:
         """Process one chat message; returns the building's reply dict."""
-        self.history.append({"user": user, "text": text})
-        decision = self.brain.respond(user, text,
-                                      history=self.history[-12:],
-                                      mood=self.director.mood)
-        self.director.on_reply(decision.behavior, decision.energy)
+        self.history.append({"user": user, "text": text, "t": time.time()})
+        self._ambient_pending.append(self.history[-1])
+        decision = self._instant.respond(user, text,
+                                         history=self.history[-12:],
+                                         mood=self.director.mood)
+        with self._show_lock:
+            self.director.on_reply(decision.behavior, decision.energy)
         reply = {
             "user": "building54",
             "text": decision.emoji + ("  " + decision.line if decision.line else ""),
@@ -55,10 +66,73 @@ class Building:
             "label": decision.label,
             "mood": round(self.director.mood, 2),
         }
-        self.history.append({"user": "building54", "text": reply["text"]})
+        self.history.append({"user": "building54", "text": reply["text"], "t": time.time()})
         self.history = self.history[-50:]
         self.outbox.put(reply)
         return reply
+
+    # --- ambient cycle ----------------------------------------------------------
+
+    def _ambient_decide(self) -> tuple:
+        """One decision per cycle: LLM reads the room; quiet -> silent wave."""
+        window, self._ambient_pending = self._ambient_pending, []
+        if not window:
+            # quiet room: default gesture, no API call, no chat spam
+            return BrainDecision("👋", "wave", +1, None,
+                                 "waves at the room"), False
+        if hasattr(self.brain, "ambient"):
+            try:
+                return self.brain.ambient(window, self.history[-12:],
+                                          self.director.mood), True
+            except Exception:
+                self.brain.fallbacks += 1
+                # LLM missed: say nothing this cycle rather than double-reply
+                return None, False
+        # rules brain: cheap keyword temperature read
+        blob = " ".join(m["text"].lower() for m in window)
+        if any(w in blob for w in ("party", "yay", "birthday", "confetti", "wooo")):
+            d = BrainDecision("🎉", "confetti", +3, None, "celebrates the room")
+        elif any(w in blob for w in ("love", "great", "awesome", "beautiful")):
+            d = BrainDecision("😊", "blush", +2, None, "glows at the room")
+        elif any(w in blob for w in ("suck", "hate", "boring", "meh")):
+            d = BrainDecision("😤", "grumble", -2, None, "grumbles softly")
+        else:
+            d = BrainDecision("👋", "wave", +1, None, "waves at the room")
+        return d, False
+
+    def ambient_cycle(self) -> dict | None:
+        """Run one 15s cycle; returns a chat reply to broadcast, or None."""
+        # if a triggered show is mid-flight, let it finish; window is kept
+        if self.director._current is not facade.get("breathe"):
+            return None
+        decision, from_llm = self._ambient_decide()
+        if decision is None:
+            return None
+        with self._show_lock:
+            self.director.on_reply(decision.behavior, decision.energy)
+        if decision.line:                      # only chat when there's something to say
+            reply = {
+                "user": "building54",
+                "text": decision.emoji + "  " + decision.line,
+                "behavior": decision.behavior,
+                "label": decision.label,
+                "mood": round(self.director.mood, 2),
+            }
+            self.history.append({"user": "building54", "text": reply["text"],
+                                 "t": time.time()})
+            self.outbox.put(reply)
+            return reply
+        return None
+
+    def start_ambient(self, stop: threading.Event,
+                      period: float = AMBIENT_PERIOD_S) -> None:
+        def loop():
+            while not stop.wait(period):
+                try:
+                    self.ambient_cycle()
+                except Exception:
+                    pass                       # the building never crashes on a cycle
+        threading.Thread(target=loop, name="chat54-ambient", daemon=True).start()
 
     def render_loop(self, stop: threading.Event) -> None:
         frame = self.display.makeframe()
@@ -100,16 +174,23 @@ def main() -> None:
     stop = threading.Event()
     threading.Thread(target=run_building_loop, args=(building, stop),
                      daemon=True).start()
+    building.start_ambient(stop)
+
+    def drain():
+        while True:
+            r = building.outbox.get()
+            print(f"building54: {r['text']}   [{r['behavior']}]")
+    threading.Thread(target=drain, daemon=True).start()
 
     print("chat54 building is up. type as a chat user and press enter. ^C to quit.")
+    print(f"(ambient room-read every {AMBIENT_PERIOD_S}s; quiet rooms get a wave)")
     user = "terminal"
     try:
         while True:
             text = input("> ").strip()
             if not text:
                 continue
-            reply = building.handle_message(user, text)
-            print(f"building54: {reply['text']}   [{reply['behavior']}]")
+            building.handle_message(user, text)
     except (KeyboardInterrupt, EOFError):
         stop.set()
 
