@@ -15,6 +15,12 @@ _UA_HEADERS = {
     "User-Agent": "gbsim/1",
 }
 
+# Smooth pacing between frame POSTs. The instance accepts <=40 fps total, but
+# posting as fast as responses return produces bursts that trip the limiter
+# (429 -> backoff -> burst again). 1/30s matches the real building's max send
+# rate and keeps us comfortably under the cap with no bursts.
+MIN_POST_INTERVAL_S = 1.0 / 30.0
+
 
 class _Sender:
     """Background frame pump. Owns the thread, the mailbox and the keep-alive connection.
@@ -35,6 +41,7 @@ class _Sender:
         self._fails = 0
         self._backoff_until = None  # monotonic time to wait until (rate limit)
         self._rate_limited = 0      # consecutive 429s (success resets)
+        self._last_post = None      # monotonic time of last POST (pacing)
 
     # -- called from the game thread ----------------------------------------
     def put(self, buf):
@@ -105,11 +112,17 @@ class _Sender:
                     self._cv.wait()
                 if self._slot is None:        # stopped and nothing left: exit. A queued frame is
                     break                     # always sent first, even after the stop deadline.
+                # smooth pacing: never POST faster than MIN_POST_INTERVAL_S
+                if self._last_post is not None:
+                    delay = MIN_POST_INTERVAL_S - (time.monotonic() - self._last_post)
+                    if delay > 0:
+                        self._cv.wait(timeout=delay)   # stop() wakes us
                 buf, self._slot = self._slot, None
                 self._busy = True
             try:
                 if self._conn is None:
                     self._conn = self._connect()
+                self._last_post = time.monotonic()
                 self._conn.request("POST", self._path, body=buf, headers=_UA_HEADERS)
                 resp = self._conn.getresponse()
                 resp.read()

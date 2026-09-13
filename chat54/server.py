@@ -20,6 +20,8 @@ from pathlib import Path
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +32,30 @@ app = FastAPI(title="chat54")
 
 building = Building()          # dummy display until main() maybe rebinds it
 stop_event = threading.Event()
+_outbox_task = None                     # strong ref so the task is never GC'd
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Single fan-out for everything the building says (replies + ambient)."""
+    global _outbox_task
+
+    async def poller():
+        while True:
+            try:
+                reply = await asyncio.to_thread(building.outbox.get, True, 1.0)
+                await room.broadcast({"type": "msg", **reply})
+            except queue.Empty:
+                await asyncio.sleep(0.1)
+            except Exception:
+                await asyncio.sleep(0.5)   # never let the pump die
+    _outbox_task = asyncio.create_task(poller())
+    yield
+    stop_event.set()
+    _outbox_task.cancel()
+
+
+app.router.lifespan_context = lifespan
 
 
 class Room:
@@ -59,24 +85,6 @@ class Room:
 
 
 room = Room()
-_outbox_task = None                     # strong ref so the task is never GC'd
-
-
-@app.on_event("startup")
-async def start_outbox_pump():
-    """Single fan-out for everything the building says (replies + ambient)."""
-    global _outbox_task
-
-    async def poller():
-        while True:
-            try:
-                reply = await asyncio.to_thread(building.outbox.get, True, 1.0)
-                await room.broadcast({"type": "msg", **reply})
-            except queue.Empty:
-                await asyncio.sleep(0.1)
-            except Exception:
-                await asyncio.sleep(0.5)   # never let the pump die
-    _outbox_task = asyncio.create_task(poller())
 
 
 @app.get("/", response_class=HTMLResponse)
