@@ -1,0 +1,111 @@
+"""The real Green Building display contract, verbatim.
+
+Same interface the simulator vendors (poc/python/gbsim/display.py is a
+verbatim copy of the upstream 17x9-Tetris file). Keeping an identical copy
+here means behavior code written against chat54 runs unchanged on the
+actual building: two methods, makeframe() and send(frame), at most 30 fps.
+"""
+
+import abc
+import numpy as np
+
+class Color:
+    """Represents a color in RGB space."""
+
+    def __init__(self, r=0, g=0, b=0):
+        self._data = [0, 0, 0]
+        self._doset(0, r)
+        self._doset(1, g)
+        self._doset(2, b)
+
+    def _doset(self, idx, value):
+        value = max(0, min(int(value), 255))
+        self._data[idx] = value
+
+    @property
+    def r(self):
+        return self._data[0]
+    @r.setter
+    def r(self, r):
+        self._doset(0, r)
+
+    @property
+    def g(self):
+        return self._data[1]
+    @g.setter
+    def g(self, g):
+        self._doset(1, g)
+
+    @property
+    def b(self):
+        return self._data[2]
+    @b.setter
+    def b(self, b):
+        self._doset(2, b)
+
+    def __str__(self):
+        return f"#{self.r:02X}{self.g:02X}{self.b:02X}"
+
+    def __repr__(self):
+        cls = self.__class__.__name__
+        return f'{cls}(r={self.r!r}, g={self.g!r}, b={self.b!r})'
+
+    def __eq__(self, other):
+        if not isinstance(other, Color):
+            return NotImplemented
+        return self._data == other._data
+
+    def __ne__(self, other):
+        eq = self.__eq__(other)
+        if eq is NotImplemented:
+            return NotImplemented
+        return not eq
+
+
+BLACK = Color()
+
+
+class Frame:
+    """Represents a single frame for the display (17 rows x 9 cols of Color)."""
+
+    DISPLAY_ROWS = 17
+    DISPLAY_COLS = 9
+
+    def __init__(self, *, rows=DISPLAY_ROWS, cols=DISPLAY_COLS):
+        self._array = np.full((rows, cols), BLACK)
+
+    def row(self, row):
+        return self._array[row,:]
+
+    def column(self, col):
+        return self._array[:,col]
+
+    def asarray(self):
+        return self._array
+
+    def nrows(self):
+        return self._array.shape[0]
+
+    def ncols(self):
+        return self._array.shape[1]
+
+    def __getitem__(self, index):
+        return self._array[index]
+
+    def __setitem__(self, index, value):
+        self._array[index] = value
+
+
+class Display(abc.ABC):
+    """Abstract base class representing the display, which may be either a
+    test interface or the real Green Building display."""
+
+    @abc.abstractmethod
+    def send(self, frame):
+        """Send the frame for display at the next frame start."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def makeframe(self):
+        """Make a frame of the correct dimensions for the display."""
+        return Frame()
