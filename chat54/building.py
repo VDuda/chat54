@@ -12,6 +12,7 @@ thread alongside the WebSocket chat room.
 from __future__ import annotations
 
 import argparse
+import json
 import queue
 import threading
 import time
@@ -30,7 +31,8 @@ class Building:
     """Glue: brain + memory + director + display."""
 
     def __init__(self, instance: str | None = None, base_url: str | None = None,
-                 memory_path: str = "chat54_memory.json", brain: str = "rules"):
+                 memory_path: str = "chat54_memory.json", brain: str = "rules",
+                 log_path: str = "chat_log.jsonl"):
         from .memory import Memory
         memory = Memory(memory_path)
         if brain == "llm":
@@ -50,15 +52,26 @@ class Building:
         self._ambient_pending: list[dict] = [] # messages since last ambient cycle
         self._show_lock = threading.Lock()     # one director.show at a time
         self._cd_thread: threading.Thread | None = None
+        self.log_path = log_path
 
     def handle_message(self, user: str, text: str) -> None:
         """Record a human message. The building does NOT reply per message —
         it stays quiet in the chat and performs the room's vibe on the next
         ambient cycle (every 15s), announced by a 3-2-1 countdown."""
-        msg = {"user": user, "text": text, "t": time.time()}
+        msg = {"user": user.strip().lower() or "anon", "text": text,
+               "t": time.time()}
         self.history.append(msg)
         self._ambient_pending.append(msg)
         self.history = self.history[-50:]
+        self._log_message(msg)
+
+    def _log_message(self, msg: dict) -> None:
+        """Append to chat_log.jsonl so the conversation outlives the process."""
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(msg) + "\n")
+        except Exception:
+            pass                                    # logging never breaks the show
 
     # --- ambient cycle ----------------------------------------------------------
 
