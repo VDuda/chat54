@@ -149,6 +149,32 @@ def test_countdown_then_show_renders_through_chain(building):
     assert seen_countdown and seen_show
 
 
+def test_countdown_mirrors_into_chat_in_sync(building):
+    """3/2/1 keycaps post on the facade's digit schedule, reveal at show start."""
+    import queue as _q
+    import time as _t
+    building.handle_message("maya", "we did the thing!")
+    settle(building)
+    t0 = _t.monotonic()
+    building.ambient_cycle()
+    step = facade.DIGIT_HOLD_S + facade.DIGIT_GAP_S
+    msgs = []
+    while True:
+        try:
+            m = building.outbox.get(timeout=5)
+            msgs.append((round(_t.monotonic() - t0, 2), m["text"]))
+        except _q.Empty:
+            break
+    texts = [t for _, t in msgs]
+    assert texts[0:3] == ["3️⃣", "2️⃣", "1️⃣"]
+    assert len(msgs) == 4
+    # each digit lands on its step boundary (+-0.2s), reveal at 3*step
+    for i in range(3):
+        assert abs(msgs[i][0] - i * step) < 0.2, msgs
+    assert abs(msgs[3][0] - 3 * step) < 0.2, msgs
+    assert msgs[3][1].startswith("👋")      # quiet-room wave reveal
+
+
 def test_ambient_loop_runs_periodically(building, monkeypatch):
     ran = threading.Event()
 

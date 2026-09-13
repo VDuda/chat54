@@ -49,6 +49,7 @@ class Building:
         self.history: list[dict] = []          # recent chat, for LLM context
         self._ambient_pending: list[dict] = [] # messages since last ambient cycle
         self._show_lock = threading.Lock()     # one director.show at a time
+        self._cd_thread: threading.Thread | None = None
 
     def handle_message(self, user: str, text: str) -> None:
         """Record a human message. The building does NOT reply per message —
@@ -88,11 +89,16 @@ class Building:
             d = BrainDecision("👋", "wave", +1, None, "waves at the room")
         return d, False
 
-    def ambient_cycle(self) -> dict | None:
-        """Run one 15s cycle: countdown 3-2-1, then the room's emotion.
+    # Countdown mirrored into the chat, synced with the facade digits: each
+    # step is DIGIT_HOLD_S + DIGIT_GAP_S on the building, and the reveal line
+    # lands exactly when the queued show starts.
+    COUNTDOWN_CHAT = ("3️⃣", "2️⃣", "1️⃣")
 
-        Returns a chat reply to broadcast (the building announcing what it's
-        about to do), or None when it stays silent this cycle.
+    def ambient_cycle(self) -> dict | None:
+        """Run one 15s cycle: countdown 3-2-1 (facade + chat), then the vibe.
+
+        Returns the reveal reply (what the building will say when the show
+        starts), or None when it stays silent this cycle.
         """
         # if a show is mid-flight, let it finish; window is kept for next time
         if self.director._current is not facade.get("breathe"):
@@ -100,22 +106,49 @@ class Building:
         decision, from_llm = self._ambient_decide()
         if decision is None:
             return None
+        t0 = time.monotonic()
         with self._show_lock:
             self.director.perform_after_countdown(decision.behavior,
                                                   decision.energy)
-        if decision.line:                      # announce as the countdown starts
-            reply = {
+        # mirror the countdown into the chat, timed with the facade digits
+        self._cd_thread = threading.Thread(target=self._countdown_chat,
+                                           args=(decision, t0), daemon=True)
+        self._cd_thread.start()
+        if decision.line:
+            return {
                 "user": "building54",
                 "text": decision.emoji + "  " + decision.line,
                 "behavior": decision.behavior,
                 "label": decision.label,
                 "mood": round(self.director.mood, 2),
             }
-            self.history.append({"user": "building54", "text": reply["text"],
-                                 "t": time.time()})
-            self.outbox.put(reply)
-            return reply
         return None
+
+    def _countdown_chat(self, decision, t0: float) -> None:
+        """Post 3/2/1 in step with the facade, then the reveal line."""
+        step = facade.DIGIT_HOLD_S + facade.DIGIT_GAP_S
+        for i, keycap in enumerate(self.COUNTDOWN_CHAT):
+            delay = (t0 + i * step) - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self.outbox.put({"user": "building54", "text": keycap,
+                             "kind": "countdown", "behavior": "countdown",
+                             "mood": round(self.director.mood, 2)})
+        # reveal: lands exactly as the show starts; the emoji alone if the
+        # decision had no line (e.g. the quiet-room wave)
+        delay = (t0 + 3 * step) - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        reply = {
+            "user": "building54",
+            "text": decision.emoji + ("  " + decision.line if decision.line else ""),
+            "behavior": decision.behavior,
+            "label": decision.label,
+            "mood": round(self.director.mood, 2),
+        }
+        self.history.append({"user": "building54", "text": reply["text"],
+                             "t": time.time()})
+        self.outbox.put(reply)
 
     def start_ambient(self, stop: threading.Event,
                       period: float = AMBIENT_PERIOD_S) -> None:
