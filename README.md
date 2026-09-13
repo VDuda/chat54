@@ -1,0 +1,87 @@
+# chat54 — the Green Building group chat
+
+The MIT Green Building (Building 54, 17×9 = 153 lit windows) as a member of your
+group chat. People scan a QR code, join on their phones, and **talk to the
+building**. The building replies like a person does when texting: an emoji or
+two, a short voice line — and because it's a 90-meter concrete body, its real
+words are **light**: every reply triggers a named facade behavior (wave-back,
+blush, storm, confetti…) in that person's column of the building.
+
+Built for Sundai Hack #140 ("Beyond Tetris: Building-Scale Physical AI"),
+September 13, 2026. Drives the event simulator at
+https://sundai.willsarg.com via the `gbsim` client; because the behavior layer
+only uses the real building's two-method display contract (`makeframe()` /
+`send(frame)` at ≤30 fps), the same code runs on the actual building on
+September 29.
+
+## How it works
+
+```
+phone (scan QR) ──ws──▶ chat54 server ──▶ brain (message → reply) ──▶ director ──▶ facade ──▶ building
+        ▲                    │                                                          (17×9 Color frames, 30 fps)
+        └────── building's replies appear in the same chat ────────────────────────────┘
+```
+
+- **brain** — rule-based intent matcher (keyword + fuzzy, zero API keys, instant).
+  Decides the reply emoji, a facade behavior, mood energy, and sometimes a
+  voice line. Remembers per-user sentiment. (An LLM-backed brain is a natural
+  next step — the Brain interface is one method.)
+- **director** — a tiny mood state machine. Likes/energy accumulate into a
+  persistent mood (grumpy ↔ chill ↔ giddy) that tints the idle animation and
+  future replies. Crossfades between behaviors; never hard-cuts.
+- **facade** — the behavior library: `draw(frame, t)` functions on a 17×9 grid
+  of `Color`. This is the only layer that touches pixels.
+- **server** — FastAPI + WebSockets chat room, phone-first controller page,
+  prints a QR code to the terminal on startup. One owner of the display
+  instance (two frame writers = flicker; the simulator README's rule #1).
+
+## Quickstart
+
+```bash
+cd chat54
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# terminal 1 — the building (prints a QR to join)
+python -m chat54.building --instance your-instance-name
+
+# terminal 2 — open the printed URL, or scan the QR with a phone
+```
+
+Then text it. Try: `hi`, `i love you`, `you suck`, `party!!`, `storm`, `dance`,
+`who are you`, `wave at Maya`, `good night`.
+
+## Driving the real simulator
+
+`--instance` is the adjective-animal name the simulator gave you. The building
+process is the only thing that sends frames; phones only send chat text, so
+there's exactly one frame writer per instance.
+
+With no `--instance` (or `--display dummy`), a big ANSI terminal preview runs
+instead — handy for developing on a plane.
+
+## Layout
+
+```
+chat54/
+  chat54/             # the app (facade, director, brain, memory, server, …)
+  gbsim/              # vendored simulator client (from willsarg/sundai-greenbuilding-sim)
+  tests/
+  live_test.py        # scripted conversation against a real simulator instance
+```
+
+## Test against the simulator
+
+```bash
+python live_test.py clever-lynx https://sundai.willsarg.com/api
+# watch https://sundai.willsarg.com/clever-lynx?view=close while it runs
+```
+
+Server status check (frames counter should climb): `curl -s https://sundai.willsarg.com/api/i/<name>/`
+
+## Contract notes (from the simulator README, worth obeying)
+
+- `send()` at most 30 fps; the sim accepts ≤40 fps per instance.
+- Only one process writes frames to an instance.
+- Don't put `upload_clip`/`flush`/`close` in behavior code — keep behavior code
+  real-building-compatible.
