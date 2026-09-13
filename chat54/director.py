@@ -40,21 +40,33 @@ class Director:
         self._started = time.monotonic()
         self._idle_started = time.monotonic()   # idle phase runs continuously
         self._prev: dict | None = None      # {fn, start} for crossfade
+        self._queued = None                 # show chained after a countdown
 
     # --- events ---------------------------------------------------------------
 
     def on_reply(self, behavior_name: str, energy: int) -> None:
-        fn = facade.get(behavior_name)
-        now = time.monotonic()
-        # snapshot current frame as the fade source
-        src = self.render_frame(now)
-        self._prev = {"fn": self._current, "frame": src,
-                      "fade_end": now + CROSSFADE_MS / 1000}
-        self._current = fn
-        self._started = now
+        """Immediately perform a behavior (chat-triggered shows don't wait)."""
+        self._start_show(facade.get(behavior_name), now=None)
         # mood: fast attack toward the energy, slow release handled in tick
         target = max(-3.0, min(3.0, self.mood + energy * 0.8))
         self.mood = target * 0.7 + self.mood * 0.3
+
+    def perform_after_countdown(self, behavior_name: str, energy: int = 0) -> None:
+        """Play 3-2-1 on the facade, then the queued behavior starts itself.
+
+        Used for ambient changes: anticipation first, then the reveal.
+        The energy is applied when the countdown starts, so the mood is
+        already leaning where the room pushed it while the digits show.
+        """
+        self._queued = facade.get(behavior_name)
+        self.on_reply("countdown", energy)
+
+    def _start_show(self, fn, now) -> None:
+        now = now if now is not None else time.monotonic()
+        src = self.render_frame(now)          # snapshot as the crossfade source
+        self._prev = {"frame": src, "fade_end": now + CROSSFADE_MS / 1000}
+        self._current = fn
+        self._started = now
 
     # --- per-frame --------------------------------------------------------------
 
@@ -77,10 +89,15 @@ class Director:
         else:
             self._current(f, t)
             self._apply_gain(f, self._current.__name__.replace("draw_", ""))
-            # behavior finished -> back to idle
+            # behavior finished -> queued show next (countdown chaining),
+            # otherwise back to idle
             if t * 1000 >= self._current.duration_ms:
-                self._current = breathe
-                self._started = now
+                nxt, self._queued = self._queued, None
+                if nxt is not None:
+                    self._start_show(nxt, now)
+                else:
+                    self._current = breathe
+                    self._started = now
 
         if self._prev is not None:
             fade_k = max(0.0, (self._prev["fade_end"] - now)) / (CROSSFADE_MS / 1000)

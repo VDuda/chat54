@@ -50,26 +50,14 @@ class Building:
         self._ambient_pending: list[dict] = [] # messages since last ambient cycle
         self._show_lock = threading.Lock()     # one director.show at a time
 
-    def handle_message(self, user: str, text: str) -> dict:
-        """Process one chat message; returns the building's reply dict."""
-        self.history.append({"user": user, "text": text, "t": time.time()})
-        self._ambient_pending.append(self.history[-1])
-        decision = self._instant.respond(user, text,
-                                         history=self.history[-12:],
-                                         mood=self.director.mood)
-        with self._show_lock:
-            self.director.on_reply(decision.behavior, decision.energy)
-        reply = {
-            "user": "building54",
-            "text": decision.emoji + ("  " + decision.line if decision.line else ""),
-            "behavior": decision.behavior,
-            "label": decision.label,
-            "mood": round(self.director.mood, 2),
-        }
-        self.history.append({"user": "building54", "text": reply["text"], "t": time.time()})
+    def handle_message(self, user: str, text: str) -> None:
+        """Record a human message. The building does NOT reply per message —
+        it stays quiet in the chat and performs the room's vibe on the next
+        ambient cycle (every 15s), announced by a 3-2-1 countdown."""
+        msg = {"user": user, "text": text, "t": time.time()}
+        self.history.append(msg)
+        self._ambient_pending.append(msg)
         self.history = self.history[-50:]
-        self.outbox.put(reply)
-        return reply
 
     # --- ambient cycle ----------------------------------------------------------
 
@@ -101,16 +89,21 @@ class Building:
         return d, False
 
     def ambient_cycle(self) -> dict | None:
-        """Run one 15s cycle; returns a chat reply to broadcast, or None."""
-        # if a triggered show is mid-flight, let it finish; window is kept
+        """Run one 15s cycle: countdown 3-2-1, then the room's emotion.
+
+        Returns a chat reply to broadcast (the building announcing what it's
+        about to do), or None when it stays silent this cycle.
+        """
+        # if a show is mid-flight, let it finish; window is kept for next time
         if self.director._current is not facade.get("breathe"):
             return None
         decision, from_llm = self._ambient_decide()
         if decision is None:
             return None
         with self._show_lock:
-            self.director.on_reply(decision.behavior, decision.energy)
-        if decision.line:                      # only chat when there's something to say
+            self.director.perform_after_countdown(decision.behavior,
+                                                  decision.energy)
+        if decision.line:                      # announce as the countdown starts
             reply = {
                 "user": "building54",
                 "text": decision.emoji + "  " + decision.line,
@@ -183,7 +176,8 @@ def main() -> None:
     threading.Thread(target=drain, daemon=True).start()
 
     print("chat54 building is up. type as a chat user and press enter. ^C to quit.")
-    print(f"(ambient room-read every {AMBIENT_PERIOD_S}s; quiet rooms get a wave)")
+    print(f"the building reads the room every {AMBIENT_PERIOD_S}s: "
+          "3-2-1 on the facade, then the vibe. it does not reply to each message.")
     user = "terminal"
     try:
         while True:

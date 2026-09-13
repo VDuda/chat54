@@ -1,4 +1,4 @@
-"""Ambient cycle tests: room temperature read, quiet-room wave, quota bounds."""
+"""Ambient cycle tests: silent chat, 15s countdown reveal, quota bounds."""
 
 import threading
 
@@ -7,11 +7,7 @@ import pytest
 from chat54.building import Building
 from chat54.display import Display, Frame
 from chat54 import facade
-
-
-def settle(building):
-    """Simulate the current show having finished (real gap is ~3s; ambient is 15s)."""
-    building.director._current = facade.get("breathe")
+from chat54.facade import ROWS, COLS
 
 
 class NullDisplay(Display):
@@ -44,32 +40,45 @@ class StubLLMBrain:
             raise RuntimeError("api down")
         return self._decision
 
-    def respond(self, user, text, **kwargs):
-        from chat54.brain import BrainDecision
-        return BrainDecision("👋", "wave", 1, None, "waves")
+
+def settle(building):
+    """Mark no show in flight (the countdown counts as a show)."""
+    building.director._current = facade.get("breathe")
+    building.director._queued = None
 
 
-def test_quiet_room_waves_without_api_or_chat(building):
+def test_messages_are_silent_no_replies(building):
+    for text in ("hello", "i love you", "you suck", "party!!"):
+        r = building.handle_message("maya", text)
+        assert r is None                       # building never replies per message
+    assert building.outbox.empty()
+    assert len(building.history) == 4
+    assert all(m["user"] == "maya" for m in building.history)
+    assert building.director._current.__name__ == "draw_breathe"  # stayed idle
+
+
+def test_quiet_room_counts_down_to_a_wave(building):
     r = building.ambient_cycle()
-    assert r is None                            # no chat spam when quiet
-    assert building.director._current.__name__ == "draw_wave"
+    assert r is None                            # silent, no chat spam
+    assert building.director._current.__name__ == "draw_countdown"
+    assert building.director._queued.__name__ == "draw_wave"
     assert building._ambient_pending == []
 
 
 def test_llm_reads_only_new_window(building):
     stub = StubLLMBrain(decision=None)
     building.brain = stub
-    building.handle_message("maya", "everyone say hi!")     # goes to window
-    building.handle_message("maya", "party later")          # and again
+    building.handle_message("maya", "everyone say hi!")
+    building.handle_message("maya", "party later")
     settle(building)
     building.ambient_cycle()
     assert stub.calls == [["everyone say hi!", "party later"]]
-    # consumed: a second cycle with no new messages is a quiet-room wave
-    building.ambient_cycle()
+    settle(building)
+    building.ambient_cycle()                    # no new messages -> no LLM call
     assert len(stub.calls) == 1
 
 
-def test_llm_decision_performs_and_chats(building):
+def test_llm_decision_chains_after_countdown(building):
     from chat54.brain import BrainDecision
     stub = StubLLMBrain(decision=BrainDecision(
         "🎉", "confetti", +3, "this room is alive.", "celebrates"))
@@ -78,8 +87,14 @@ def test_llm_decision_performs_and_chats(building):
     settle(building)
     r = building.ambient_cycle()
     assert r is not None and "alive" in r["text"]
+    assert building.director._current.__name__ == "draw_countdown"
+    assert building.director._queued.__name__ == "draw_confetti"
+
+    # advance past the countdown: the queued show must start itself
+    import time as _t
+    later = _t.monotonic() + (building.director._current.duration_ms + 100) / 1000
+    building.director.render_frame(later)
     assert building.director._current.__name__ == "draw_confetti"
-    assert building.history[-1]["user"] == "building54"
 
 
 def test_llm_failure_stays_silent_that_cycle(building):
@@ -90,22 +105,48 @@ def test_llm_failure_stays_silent_that_cycle(building):
     r = building.ambient_cycle()
     assert r is None
     assert stub.fallbacks == 1
-    # window was consumed; building did not perform anything for it
+    assert building.director._current.__name__ == "draw_breathe"
     assert building._ambient_pending == []
 
 
 def test_midshow_cycle_skips_but_keeps_window(building):
-    building.handle_message("maya", "i love you")           # triggers blush show
-    assert building.director._current.__name__ != "draw_breathe"
-    r = building.ambient_cycle()
+    building.ambient_cycle()                    # countdown starts
+    r = building.ambient_cycle()                # still counting/chaining
     assert r is None
-    assert len(building._ambient_pending) == 1   # kept for the next cycle
+    assert len(building._ambient_pending) == 0  # window consumed by first cycle
+    # new messages during the show are held for the next cycle
+    building.handle_message("maya", "again!")
+    assert len(building._ambient_pending) == 1
 
 
 def test_rules_temperature_read(building):
     building.handle_message("maya", "happy birthday!!!")
+    settle(building)
     building.ambient_cycle()
-    assert building.director._current.__name__ == "draw_confetti"
+    assert building.director._current.__name__ == "draw_countdown"
+    assert building.director._queued.__name__ == "draw_confetti"
+
+
+def test_countdown_then_show_renders_through_chain(building):
+    """The full render path: countdown frames, then the queued show's frames."""
+    import time as _t
+    building.handle_message("maya", "hello")
+    settle(building)
+    building.ambient_cycle()
+    now = _t.monotonic()
+    step = 0.15
+    seen_countdown = seen_show = False
+    for i in range(60):                         # ~9s at 0.15s steps
+        f = building.director.render_frame(now + i * step)
+        lit = sum(1 for r in range(ROWS) for c in range(COLS)
+                  if (f[r][c].r, f[r][c].g, f[r][c].b) != (0, 0, 0))
+        cd_ms = facade.BEHAVIORS["countdown"].duration_ms
+        t_rel = i * step
+        if t_rel < cd_ms / 1000 and lit > 8:
+            seen_countdown = True
+        if t_rel > cd_ms / 1000 + 0.5 and lit > 8:
+            seen_show = True
+    assert seen_countdown and seen_show
 
 
 def test_ambient_loop_runs_periodically(building, monkeypatch):

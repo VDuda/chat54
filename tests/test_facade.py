@@ -18,7 +18,29 @@ def test_registry_complete():
     assert set(facade.BEHAVIORS) == {
         "breathe", "listen", "wave", "blush", "confetti", "grumble",
         "dance", "bow", "goodnight", "heartbeat", "look", "story",
+        "countdown",
     }
+
+
+def test_countdown_draws_three_digits_then_goes_dark():
+    fn = facade.BEHAVIORS["countdown"]
+    dur = fn.duration_ms / 1000
+    hold = facade.DIGIT_HOLD_S
+    lit_per_step = []
+    for center in (0.4,):                      # mid-hold of each digit
+        for step in range(3):
+            f = Frame()
+            fn(f, step * (hold + facade.DIGIT_GAP_S) + center)
+            lit = sum(1 for r in range(ROWS) for c in range(COLS)
+                      if (f[r][c].r, f[r][c].g, f[r][c].b) != (0, 0, 0))
+            lit_per_step.append(lit)
+    assert all(n > 8 for n in lit_per_step), lit_per_step   # each digit visible
+    # after the last digit the show is over (director handles chaining)
+    f = Frame()
+    fn(f, dur + 0.05)
+    lit = sum(1 for r in range(ROWS) for c in range(COLS)
+              if (f[r][c].r, f[r][c].g, f[r][c].b) != (0, 0, 0))
+    assert lit == 0
 
 
 @pytest.mark.parametrize("name", sorted(facade.BEHAVIORS))

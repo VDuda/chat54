@@ -293,6 +293,78 @@ def gain_for(name: str) -> float:
     return FACADE_GAIN.get(name, 1.0)
 
 
+# --- countdown ---------------------------------------------------------------
+
+# Big digit sprites for the anticipation countdown, in the spirit of the
+# upstream Tetris game's 3-2-1. Each is 7 rows tall, drawn centred, holding
+# most of the facade. '1' spans all 17 rows: a building-scale digit.
+DIGITS = {
+    "3": [
+        ".wwwwww.",
+        ".......w",
+        ".wwwwww.",
+        ".......w",
+        ".wwwwww.",
+    ],
+    "2": [
+        ".wwwwww.",
+        ".......w",
+        ".wwwwww.",
+        "w.......",
+        ".wwwwww.",
+    ],
+    "1": [
+        "...ww...",
+        "..www...",
+        ".wwww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "...ww...",
+        "..www...",
+    ],
+}
+
+DIGIT_HOLD_S = 0.8          # hold each digit
+DIGIT_GAP_S = 0.25          # dark gap between digits
+DIGIT_MS = int((DIGIT_HOLD_S + DIGIT_GAP_S) * 3 * 1000)  # full 3-2-1
+
+
+def _digit_cells(rows):
+    return [(r, c) for r, line in enumerate(rows) for c, ch in enumerate(line)
+            if ch == "w"]
+
+
+@behavior(DIGIT_MS, "counts down")
+def draw_countdown(f: Frame, t: float) -> None:
+    """3... 2... 1... anticipation before a big ambient change."""
+    dur = draw_countdown.duration_ms / 1000
+    if t < 0 or t >= dur:
+        return                                          # done: hand back dark
+    step_f = t // (DIGIT_HOLD_S + DIGIT_GAP_S)          # 0,1,2 -> 3,2,1
+    in_step = t - step_f * (DIGIT_HOLD_S + DIGIT_GAP_S)
+    if in_step >= DIGIT_HOLD_S:
+        return                                          # gap between digits
+    which = ["3", "2", "1"][min(int(step_f), 2)]
+    cells = _digit_cells(DIGITS[which])
+    h = len(DIGITS[which])
+    top = (ROWS - h) // 2                               # vertically centred
+    # pop-in envelope: quick rise, hold, slight ease-off
+    k = min(1.0, in_step / 0.12) * (0.85 + 0.15 * math.sin(in_step * 9))
+    for r, c in cells:
+        if 0 <= top + r < ROWS:
+            f[top + r][c] = scale(warm(), 0.9 * k)
+
+
 # --- registry ----------------------------------------------------------------
 
 BEHAVIORS = {
@@ -308,6 +380,7 @@ BEHAVIORS = {
     "heartbeat": draw_heartbeat,
     "look": draw_look,
     "story": draw_story,
+    "countdown": draw_countdown,
 }
 
 
