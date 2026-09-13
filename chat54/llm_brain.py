@@ -18,11 +18,24 @@ The injected chat_fn isolates tests from the network: tests pass a stub.
 from __future__ import annotations
 
 import json
+import os
 import random
 
 from . import facade
 from .brain import Brain, BrainDecision
 from .memory import Memory
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Tiny .env loader so the key can live out of git without extra deps."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip())
 
 PERSONA = """You are building 54 — the MIT Green Building, 21 floors, 153 lit \
 windows, home of the famous Tetris prank. You are a member of a group chat \
@@ -75,7 +88,12 @@ class LLMBrain(Brain):
                 self.memory.add_sentiment(user, -1)
 
         try:
-            decision = self._ask_llm(user, text, history or [], mood)
+            try:
+                decision = self._ask_llm(user, text, history or [], mood)
+            except Exception:
+                # tiny free models misfire occasionally; one retry before
+                # giving up cuts the fallback rate a lot
+                decision = self._ask_llm(user, text, history or [], mood)
         except Exception:
             self.fallbacks += 1
             return super().respond(user, text, history=history, mood=mood,
@@ -118,16 +136,31 @@ class LLMBrain(Brain):
     @staticmethod
     def _openai_chat(prompt: str) -> str:
         from openai import OpenAI          # optional dependency
-        client = OpenAI()
+        _load_dotenv()
+        # OpenRouter if configured, else OpenAI directly.
+        or_key = os.environ.get("OPENROUTER_API_KEY")
+        if or_key:
+            client = OpenAI(
+                api_key=or_key,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers={"HTTP-Referer": "https://github.com/VDuda/chat54",
+                                 "X-Title": "chat54"},
+            )
+            model = os.environ.get("CHAT54_MODEL", "liquid/lfm-2.5-2.6b:free")
+        else:
+            client = OpenAI()
+            model = os.environ.get("CHAT54_MODEL", "gpt-4o-mini")
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {"role": "system", "content": PERSONA},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.9,
-            max_tokens=120,
-            timeout=6,
+            # the free liquid model always reasons first; its thinking counts
+            # against max_tokens, so leave real headroom or content arrives empty
+            max_tokens=1000,
+            timeout=15,
         )
         content = resp.choices[0].message.content or ""
         return content[content.find("{"):content.rfind("}") + 1]

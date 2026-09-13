@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .pytest_cache/
 chat54_memory.json
+.env
