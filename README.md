@@ -13,6 +13,12 @@ via the vendored `gbsim` client; because the behavior layer only uses the real
 building's two-method display contract (`makeframe()` / `send(frame)` at
 ≤30 fps), the same code runs on the actual building on September 29.
 
+![chat54: the clever-lynx simulator, the phone group chat, and the server](screenshot.png)
+
+*Left: the building performing the room's vibe in light. Right: the phone
+group chat — the building announces itself there too (3️⃣2️⃣1️⃣, then the vibe
+read and show).*
+
 ## What a cycle looks like
 
 ```
