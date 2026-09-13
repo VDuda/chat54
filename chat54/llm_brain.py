@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 import random
+import threading
+import time
 
 from . import facade
 from .brain import Brain, BrainDecision
@@ -63,14 +65,25 @@ HISTORY_TURNS = 12
 MAX_LINE_CHARS = 90
 
 
+# Minimum spacing between LLM API calls. The free OpenRouter tier is
+# rate-limited; this keeps a chatty room from burning through it, and the
+# server already answers each message off its socket loop so a short wait
+# only makes the building feel thoughtful, not broken.
+MIN_INTERVAL_S = 2.0
+
+
 class LLMBrain(Brain):
     """Drop-in Brain replacement. Falls back to rules on any failure."""
 
     def __init__(self, memory: Memory | None = None, seed: int | None = None,
-                 model: str = "gpt-4o-mini", chat_fn=None):
+                 model: str = "gpt-4o-mini", chat_fn=None,
+                 min_interval: float = MIN_INTERVAL_S):
         super().__init__(memory=memory, seed=seed)
         self.model = model
         self._chat_fn = chat_fn or self._openai_chat
+        self.min_interval = min_interval
+        self._last_call = 0.0
+        self._throttle_lock = threading.Lock()
         self.fallbacks = 0            # visible in status/logs, fun trivia
 
     # --- interface -------------------------------------------------------------
@@ -111,7 +124,16 @@ class LLMBrain(Brain):
 
     # --- llm plumbing ------------------------------------------------------------
 
+    def _throttle(self) -> None:
+        """Space API calls at least min_interval apart (thread-safe)."""
+        with self._throttle_lock:
+            wait = self.min_interval - (time.monotonic() - self._last_call)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_call = time.monotonic()
+
     def _ask_llm(self, user: str, text: str, history: list, mood: float) -> BrainDecision:
+        self._throttle()
         turns = [
             f"{m['user']}: {m['text']}"
             for m in history[-HISTORY_TURNS:]

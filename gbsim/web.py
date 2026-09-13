@@ -2,6 +2,7 @@
 import atexit
 import http.client
 import threading
+import time
 import weakref
 from urllib.parse import urlsplit
 from .display import Display, Frame
@@ -32,6 +33,8 @@ class _Sender:
         self._cv = threading.Condition()
         self._thread = None
         self._fails = 0
+        self._backoff_until = None  # monotonic time to wait until (rate limit)
+        self._rate_limited = 0      # consecutive 429s (success resets)
 
     # -- called from the game thread ----------------------------------------
     def put(self, buf):
@@ -86,6 +89,17 @@ class _Sender:
 
     def _pump(self):
         while True:
+            # Rate-limit backoff: the instance accepts <=40 fps total; when the
+            # server says 429, stop hammering, drop stale frames (latest-wins
+            # means they are outdated anyway) and wait before retrying.
+            with self._cv:
+                while self._backoff_until is not None:
+                    remaining = self._backoff_until - time.monotonic()
+                    if remaining <= 0:
+                        self._backoff_until = None
+                        break
+                    self._slot = None            # stale under latest-wins
+                    self._cv.wait(timeout=min(remaining, 0.5))
             with self._cv:
                 while self._slot is None and not self._stopped:
                     self._cv.wait()
@@ -99,9 +113,17 @@ class _Sender:
                 self._conn.request("POST", self._path, body=buf, headers=_UA_HEADERS)
                 resp = self._conn.getresponse()
                 resp.read()
+                if resp.status == 429:
+                    with self._cv:
+                        self._rate_limited += 1
+                        delay = min(1.5 * 2 ** (self._rate_limited - 1), 10.0)
+                        self._backoff_until = time.monotonic() + delay
+                    print(f"gbsim: rate limited, backing off {delay:.1f}s")
+                    raise RuntimeError("HTTP 429: Too Many Requests")
                 if resp.status >= 400:
                     raise RuntimeError(f"HTTP {resp.status}: {resp.reason}")
                 self._fails = 0
+                self._rate_limited = 0
             except Exception as e:  # fire-and-forget: log (not too often), never crash the game
                 self._fails += 1
                 if self._fails <= 3 or self._fails % 100 == 0:
