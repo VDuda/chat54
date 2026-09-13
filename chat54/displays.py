@@ -18,15 +18,24 @@ ROWS, COLS = Frame.DISPLAY_ROWS, Frame.DISPLAY_COLS
 class GBSimDisplay(Display):
     """Streams frames to a simulator instance at sundai.willsarg.com."""
 
-    def __init__(self, instance: str, base_url: str | None = None):
+    def __init__(self, instance: str, base_url: str | None = None,
+                 timeout: float = 5.0):
+        # timeout bounds each response read; Cloudflare can be slow to hand
+        # back the 204 on some networks, and a 2s leash causes connection
+        # churn even though the frames themselves always land
         from gbsim import WebDisplay            # vendored in chat54/gbsim
-        self._d = WebDisplay(instance, base_url=base_url) if base_url else WebDisplay(instance)
+        self._d = (WebDisplay(instance, base_url=base_url, timeout=timeout)
+                   if base_url else WebDisplay(instance, timeout=timeout))
 
     def makeframe(self) -> Frame:
         return self._d.makeframe()
 
     def send(self, frame: Frame) -> None:
         self._d.send(frame)
+
+    def flush(self, timeout: float = 6.0) -> bool:
+        """Wait until the newest frame has been sent (sim-only helper)."""
+        return self._d.flush(timeout)
 
 
 class DummyDisplay(Display):
