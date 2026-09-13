@@ -111,7 +111,7 @@ def draw_listen(f: Frame, t: float) -> None:
 
 # --- triggered behaviors -----------------------------------------------------
 
-@behavior(2_600, "waves back at you")
+@behavior(3_200, "waves back at you")
 def draw_wave(f: Frame, t: float) -> None:
     """A friendly diagonal sweep that rolls up the facade and back down."""
     dur = draw_wave.duration_ms / 1000
@@ -125,7 +125,7 @@ def draw_wave(f: Frame, t: float) -> None:
                 f[r][c] = scale(hsv(0.52 + 0.02 * c, 0.7, 1.0), v)
 
 
-@behavior(2_400, "blushes")
+@behavior(3_000, "blushes")
 def draw_blush(f: Frame, t: float) -> None:
     """A shy pink bloom that starts at the heart and spreads upward."""
     dur = draw_blush.duration_ms / 1000
@@ -140,19 +140,19 @@ def draw_blush(f: Frame, t: float) -> None:
             f[r][c] = scale(pink(), v * (0.75 + 0.25 * math.sin(t * 6)) * fadeout(t, dur))
 
 
-@behavior(3_000, "celebrates")
+@behavior(3_400, "celebrates")
 def draw_confetti(f: Frame, t: float) -> None:
     """Party: colorful cells sparkle and pop upward, then rain down."""
     dur = draw_confetti.duration_ms / 1000
     p = t / dur
     rng = math_rng()
+    env = 0.5 - 0.5 * math.cos(2 * math.pi * p)            # smooth 0->1->0
     for r in range(ROWS):
         for c in range(COLS):
             # deterministic per-cell random phase
             s = rng((r, c))
             tw = 0.5 + 0.5 * math.sin(2 * math.pi * (t * 2.0 + s * 7.0))
-            rise = (1 - p) if p < 0.5 else (p - 0.5) * 2       # burst then settle
-            v = tw * rise
+            v = tw * env
             if v > 0.08:
                 f[r][c] = hsv(s + t * 0.1, 0.9, v)
 
@@ -166,7 +166,7 @@ def math_rng():
     return h
 
 
-@behavior(2_800, "grumbles")
+@behavior(3_400, "grumbles")
 def draw_grumble(f: Frame, t: float) -> None:
     """Stormy: dark red flicker rising from the ground floors."""
     dur = draw_grumble.duration_ms / 1000
@@ -179,7 +179,7 @@ def draw_grumble(f: Frame, t: float) -> None:
             f[r][c] = scale(Color(200, 40, 30), v)
 
 
-@behavior(3_200, "dances")
+@behavior(3_600, "dances")
 def draw_dance(f: Frame, t: float) -> None:
     """Dance mode: equalizer columns bouncing to an imaginary beat."""
     dur = draw_dance.duration_ms / 1000
@@ -192,7 +192,7 @@ def draw_dance(f: Frame, t: float) -> None:
                 f[r][c] = scale(hsv(0.12 + 0.05 * (c % 3), 0.85, 1.0), k * fadeout(t, dur))
 
 
-@behavior(2_200, "takes a bow")
+@behavior(3_000, "takes a bow")
 def draw_bow(f: Frame, t: float) -> None:
     """A single bright column pulse — 'at your service'."""
     dur = draw_bow.duration_ms / 1000
@@ -205,9 +205,9 @@ def draw_bow(f: Frame, t: float) -> None:
             f[r][c] = scale(Color(255, 250, 210), v)
 
 
-@behavior(3_000, "settles for the night")
+@behavior(3_600, "settles for the night")
 def draw_goodnight(f: Frame, t: float) -> None:
-    """Lights dim floor by floor, a single window left on, then off."""
+    """Lights dim floor by floor; one window stays on, winks, then off."""
     dur = draw_goodnight.duration_ms / 1000
     p = t / dur
     cutoff = int(p * (ROWS + 2))
@@ -220,9 +220,13 @@ def draw_goodnight(f: Frame, t: float) -> None:
                 f[r][c] = scale(warm(), 0.25 * w)
             else:
                 f[r][c] = scale(hsv(0.6, 0.4, 1.0), 0.10 + 0.06 * w)
+    # the famous last window: warm and bright near the end, then gone
+    if p > 0.88:
+        wink = math.sin(math.pi * min(1.0, (p - 0.88) / 0.12))
+        f[1][4] = scale(warm(), 0.55 * wink)
 
 
-@behavior(2_600, "hums a heart-beat")
+@behavior(3_200, "hums a heart-beat")
 def draw_heartbeat(f: Frame, t: float) -> None:
     """Two-thump heartbeat pulse in warm white."""
     dur = draw_heartbeat.duration_ms / 1000
@@ -238,7 +242,7 @@ def draw_heartbeat(f: Frame, t: float) -> None:
             f[r][c] = scale(Color(255, 80, 90), v)
 
 
-@behavior(2_800, "looks over here")
+@behavior(3_200, "looks over here")
 def draw_look(f: Frame, t: float) -> None:
     """A scanning 'eye': a bright band travels toward the side mentioned."""
     dur = draw_look.duration_ms / 1000
@@ -253,7 +257,7 @@ def draw_look(f: Frame, t: float) -> None:
             f[r][c] = scale(cool(), v * (0.4 + 0.6 * (r / ROWS)) * fadeout(t, dur))
 
 
-@behavior(3_400, "tells you its story")
+@behavior(4_000, "tells you its story")
 def draw_story(f: Frame, t: float) -> None:
     """A slow rainbow rolls up the tower: the building showing off its age."""
     dur = draw_story.duration_ms / 1000
@@ -261,6 +265,32 @@ def draw_story(f: Frame, t: float) -> None:
         for c in range(COLS):
             v = (0.30 + 0.18 * math.sin(2 * math.pi * (t * 0.8 + r * 0.1))) * fadeout(t, dur)
             f[r][c] = hsv((r / ROWS) * 0.5 + t * 0.15 + c * 0.01, 0.75, v)
+
+
+# --- brightness tuning -------------------------------------------------------
+
+# Per-behavior gain, tuned against the simulator viewer (its renderer applies
+# a canvas core-lift plus GPU bloom, so dim content reads brighter than raw
+# and hot content blooms). Values from measured luminance: peaks target the
+# 150-200 range for shows, 20-25 for idle.
+FACADE_GAIN = {
+    "breathe": 0.60,     # idle should whisper: mean 23 -> 14
+    "listen": 0.75,
+    "wave": 0.85,
+    "blush": 1.40,       # shy but visible: peak 128 -> 179
+    "confetti": 0.85,
+    "grumble": 1.60,     # anger must read: peak 72 -> 115
+    "dance": 0.70,       # was flooding the facade (mean 86 -> 60)
+    "bow": 0.80,         # was near full white (peak 248 -> 198)
+    "goodnight": 1.00,
+    "heartbeat": 1.40,   # thumps were faint (peak 109 -> 153)
+    "look": 1.35,        # scanning band was half-asleep
+    "story": 0.85,
+}
+
+
+def gain_for(name: str) -> float:
+    return FACADE_GAIN.get(name, 1.0)
 
 
 # --- registry ----------------------------------------------------------------

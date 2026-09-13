@@ -38,6 +38,7 @@ class Director:
         self.mood = 0.0                     # -3..+3, 0 = chill
         self._current = facade.get("breathe")
         self._started = time.monotonic()
+        self._idle_started = time.monotonic()   # idle phase runs continuously
         self._prev: dict | None = None      # {fn, start} for crossfade
 
     # --- events ---------------------------------------------------------------
@@ -67,14 +68,18 @@ class Director:
         now = now if now is not None else time.monotonic()
         f = Frame()
         t = now - self._started
+        breathe = facade.get("breathe")
 
-        if self._current is facade.get("breathe"):
-            self._draw_idle_tinted(f, t)
+        if self._current is breathe:
+            # idle phase never resets: returning from a show continues the
+            # breathing cycle where it would have been, so no phase jump
+            self._draw_idle_tinted(f, now - self._idle_started)
         else:
             self._current(f, t)
+            self._apply_gain(f, self._current.__name__.replace("draw_", ""))
             # behavior finished -> back to idle
             if t * 1000 >= self._current.duration_ms:
-                self._current = facade.get("breathe")
+                self._current = breathe
                 self._started = now
 
         if self._prev is not None:
@@ -97,6 +102,17 @@ class Director:
             for r in range(ROWS):
                 for c in range(COLS):
                     f[r][c] = _tint(f[r][c], 0.02, 0.35 + 0.3 * k)
+        self._apply_gain(f, "breathe")
+
+    @staticmethod
+    def _apply_gain(f: Frame, name: str) -> None:
+        g = facade.gain_for(name)
+        if g == 1.0:
+            return
+        for r in range(ROWS):
+            for c in range(COLS):
+                col = f[r][c]
+                f[r][c] = Color(col.r * g, col.g * g, col.b * g)
 
     @staticmethod
     def _blend(f: Frame, old: Frame, keep_old: float) -> None:
