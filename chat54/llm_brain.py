@@ -159,12 +159,15 @@ class LLMBrain(Brain):
             f"Recent chat:\n{recent}\n\n"
             f"NEW messages since you last looked:\n{win}\n\n"
             "Pick ONE behavior that matches the actual emotional temperature "
-            "of the NEW messages. Match intensity honestly: most conversation "
-            "is NOT a party - reserve confetti for real celebration, use wave "
-            "or look or story for calm/worky chat, and grumble or goodnight "
-            "when the room is negative or winding down. Vary your choices; do "
-            "not repeat your last show without a reason. Reply with a short "
-            "line reacting to the room."
+            "of the NEW messages. If someone explicitly asks for a show "
+            "(e.g. 'dance for me', 'do the heartbeat', 'goodnight'), do that "
+            "show - a direct request outranks your own vibe read. Otherwise "
+            "match intensity honestly: most conversation is NOT a party - "
+            "reserve confetti for real celebration, use wave or look or story "
+            "for calm/worky chat, and grumble or goodnight when the room is "
+            "negative or winding down. Vary your choices; do not repeat your "
+            "last show without a reason. Reply with a short line reacting "
+            "to the room."
         )
         data = None
         for attempt, nudge in enumerate(("", "\n(JSON only, no prose.)",

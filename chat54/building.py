@@ -77,9 +77,17 @@ class Building:
                 self.brain.fallbacks += 1
                 # LLM missed: say nothing this cycle rather than double-reply
                 return None, False
-        # rules brain: cheap keyword temperature read
+        # rules brain: explicit requests first, then a cheap vibe read
         blob = " ".join(m["text"].lower() for m in window)
-        if any(w in blob for w in ("party", "yay", "birthday", "confetti", "wooo")):
+        if any(w in blob for w in ("dance", "dancing")):
+            d = BrainDecision("💃", "dance", +2, None, "takes the request")
+        elif any(w in blob for w in ("heartbeat", "heart beat", "pulse")):
+            d = BrainDecision("💓", "heartbeat", +1, None, "thumps for you")
+        elif any(w in blob for w in ("goodnight", "good night", "go to sleep")):
+            d = BrainDecision("🌙", "goodnight", -1, None, "winds down")
+        elif any(w in blob for w in ("storm", "rain", "thunder")):
+            d = BrainDecision("⛈️", "grumble", -1, None, "broods on cue")
+        elif any(w in blob for w in ("party", "yay", "birthday", "confetti", "wooo")):
             d = BrainDecision("🎉", "confetti", +3, None, "celebrates the room")
         elif any(w in blob for w in ("love", "great", "awesome", "beautiful")):
             d = BrainDecision("😊", "blush", +2, None, "glows at the room")
